@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -52,6 +54,13 @@ class ReceiveTab extends ConsumerWidget {
                 title: Text(file.uri.pathSegments.last),
                 subtitle: Text(file.parent.path,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
+                // `open`은 macOS 전용 — Android(M4)에선 open_filex 교체 판단
+                onTap: () => Process.run('open', [file.path]),
+                trailing: IconButton(
+                  tooltip: 'Finder에서 표시',
+                  icon: const Icon(Icons.folder_open_outlined),
+                  onPressed: () => Process.run('open', ['-R', file.path]),
+                ),
               ),
           ],
         ],
