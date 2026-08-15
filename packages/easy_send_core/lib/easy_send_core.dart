@@ -1,8 +1,3 @@
-/// Support for doing something awesome.
-///
-/// More dartdocs go here.
-library;
-
-export 'src/easy_send_core_base.dart';
-
-// TODO: Export any libraries intended for clients of this package.
+export 'src/discovery/discovery_service.dart';
+export 'src/models/device.dart';
+export 'src/protocol.dart';
