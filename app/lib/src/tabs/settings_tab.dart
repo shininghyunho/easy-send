@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:easy_send_core/easy_send_core.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -64,9 +66,12 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('저장 폴더'),
-            subtitle: Text(controller.settings.saveDirPath),
+            // Android는 MediaStore 경유 Downloads 고정 (S3)
+            subtitle: Text(Platform.isAndroid
+                ? 'Downloads (고정)'
+                : controller.settings.saveDirPath),
             trailing: OutlinedButton(
-              onPressed: _pickSaveDir,
+              onPressed: Platform.isAndroid ? null : _pickSaveDir,
               child: const Text('변경'),
             ),
           ),

@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- S2: Android는 멀티캐스트를 기본으로 버려서 MulticastLock 획득에 필요 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <application
-        android:label="easy_send_app"
+        android:label="easy-send"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

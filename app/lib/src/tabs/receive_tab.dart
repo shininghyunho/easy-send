@@ -39,7 +39,7 @@ class ReceiveTab extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '저장 폴더: ${controller.settings.saveDirPath}',
+            '저장 폴더: ${Platform.isAndroid ? 'Downloads' : controller.settings.saveDirPath}',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -54,13 +54,18 @@ class ReceiveTab extends ConsumerWidget {
                 title: Text(file.uri.pathSegments.last),
                 subtitle: Text(file.parent.path,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                // `open`은 macOS 전용 — Android(M4)에선 open_filex 교체 판단
-                onTap: () => Process.run('open', [file.path]),
-                trailing: IconButton(
-                  tooltip: 'Finder에서 표시',
-                  icon: const Icon(Icons.folder_open_outlined),
-                  onPressed: () => Process.run('open', ['-R', file.path]),
-                ),
+                // `open`은 macOS 전용 — Android는 open_filex 도입 여부 판단 전까지 미지원
+                onTap: Platform.isMacOS
+                    ? () => Process.run('open', [file.path])
+                    : null,
+                trailing: Platform.isMacOS
+                    ? IconButton(
+                        tooltip: 'Finder에서 표시',
+                        icon: const Icon(Icons.folder_open_outlined),
+                        onPressed: () =>
+                            Process.run('open', ['-R', file.path]),
+                      )
+                    : null,
               ),
           ],
         ],

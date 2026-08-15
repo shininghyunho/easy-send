@@ -4,7 +4,14 @@ import 'dart:io';
 
 import 'package:easy_send_core/easy_send_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+
+/// MulticastLock(S2)·MediaStore 저장(S3) — Android 전용 네이티브 채널.
+const _native = MethodChannel('easy_send/native');
+
+/// MediaStore가 Download/에 쓴 파일의 실제 공개 경로 (표시용).
+const _androidDownloadsPath = '/storage/emulated/0/Download';
 
 /// 앱 전역 설정 — baseDir/settings.json 1파일로 영속.
 class AppSettings {
@@ -60,6 +67,9 @@ class AppController extends ChangeNotifier {
       );
 
   static Future<AppController> start() async {
+    if (Platform.isAndroid) {
+      await _native.invokeMethod('acquireMulticastLock');
+    }
     final baseDir = await getApplicationSupportDirectory();
     final identity = await DeviceIdentity.loadOrCreate(baseDir);
     final trustStore = TrustStore(File('${baseDir.path}/trusted.json'));
@@ -77,6 +87,10 @@ class AppController extends ChangeNotifier {
         alias: json['alias'] as String,
         saveDirPath: json['saveDirPath'] as String,
       );
+    }
+    // Android는 saveDir가 MediaStore로 옮기기 전 대기 폴더 (S3 — 직접 쓰기 불가)
+    if (Platform.isAndroid) {
+      return AppSettings(alias: 'Android', saveDirPath: '${baseDir.path}/inbox');
     }
     final downloads = await getDownloadsDirectory();
     return AppSettings(
@@ -101,9 +115,11 @@ class AppController extends ChangeNotifier {
       saveDir: saveDir,
       onApprovalRequest: (req) => approvalHandler?.call(req) ?? Future.value(false),
       onFileSaved: (fileId, saved) {
-        recentReceived.insert(0, saved);
-        if (recentReceived.length > 20) recentReceived.removeLast();
-        notifyListeners();
+        if (Platform.isAndroid) {
+          _exportToDownloads(saved);
+          return;
+        }
+        _recordReceived(saved);
       },
     );
     // PRD 4.1: 기본 포트가 사용 중이면 임의 포트로 열고 announce의 port로 알린다
@@ -119,6 +135,24 @@ class AppController extends ChangeNotifier {
     _deviceSub = discovery.devices.listen(_devicesOut.add);
     _discovery = discovery;
     notifyListeners();
+  }
+
+  void _recordReceived(File file) {
+    recentReceived.insert(0, file);
+    if (recentReceived.length > 20) recentReceived.removeLast();
+    notifyListeners();
+  }
+
+  Future<void> _exportToDownloads(File saved) async {
+    try {
+      final name = await _native
+          .invokeMethod<String>('saveToDownloads', {'path': saved.path});
+      _recordReceived(
+          File('$_androidDownloadsPath/${name ?? saved.uri.pathSegments.last}'));
+    } catch (_) {
+      // MediaStore 이동 실패 시 대기 폴더 원본 위치로 표시
+      _recordReceived(saved);
+    }
   }
 
   Future<void> _stopServices() async {
