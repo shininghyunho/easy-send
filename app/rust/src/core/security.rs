@@ -66,7 +66,7 @@ impl Identity {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustedDevice {
     pub alias: String,
@@ -106,6 +106,27 @@ impl TrustStore {
                 trusted_at: OffsetDateTime::now_utc().format(&Rfc3339)?,
             },
         );
+        self.save()
+    }
+
+    pub fn remove(&mut self, fingerprint: &str) -> Result<()> {
+        if self.devices.remove(fingerprint).is_none() {
+            return Ok(());
+        }
+        self.save()
+    }
+
+    pub fn all(&self) -> Vec<(String, TrustedDevice)> {
+        let mut list: Vec<(String, TrustedDevice)> = self
+            .devices
+            .iter()
+            .map(|(fp, dev)| (fp.clone(), dev.clone()))
+            .collect();
+        list.sort_by(|a, b| a.1.trusted_at.cmp(&b.1.trusted_at));
+        list
+    }
+
+    fn save(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }

@@ -146,6 +146,9 @@ pub async fn exchange_info(addr: &str, self_info: &PeerInfo) -> Result<PeerInfo>
     Ok(info)
 }
 
+// 파일 1개 안에서의 누적 송신 바이트
+pub type ProgressFn = Arc<dyn Fn(u64) + Send + Sync>;
+
 pub struct Sender {
     addr: String,
     client: HttpsClient,
@@ -194,9 +197,19 @@ impl Sender {
         token: &str,
         path: &Path,
         size: u64,
+        on_progress: Option<ProgressFn>,
     ) -> Result<()> {
         let file = tokio::fs::File::open(path).await?;
-        let stream = tokio_util::io::ReaderStream::new(file).map_ok(Frame::data);
+        let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stream = tokio_util::io::ReaderStream::new(file).map_ok(move |chunk| {
+            if let Some(cb) = &on_progress {
+                let total = sent
+                    .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed)
+                    + chunk.len() as u64;
+                cb(total);
+            }
+            Frame::data(chunk)
+        });
         let req = Request::builder()
             .method(Method::POST)
             .uri(self.url(

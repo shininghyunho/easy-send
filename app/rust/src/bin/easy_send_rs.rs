@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[tokio::main]
@@ -87,7 +87,7 @@ async fn cmd_ls(args: &[String]) -> Result<()> {
     let wait: u64 = flags.get("wait").map_or(Ok(3), |w| w.parse())?;
 
     let identity = Identity::load_or_create(&config_dir())?;
-    let d = Discoverer::start(self_info(flags.get("alias").cloned(), &identity, SERVICE_PORT)).await?;
+    let d = Discoverer::start(self_info(flags.get("alias").cloned(), &identity, SERVICE_PORT), None).await?;
     println!("발견된 기기 ({wait}초 탐색):");
     tokio::time::sleep(Duration::from_secs(wait)).await;
     let devices = d.devices();
@@ -185,6 +185,7 @@ async fn cmd_send(args: &[String]) -> Result<()> {
                 &session.tokens[&file_id],
                 Path::new(p),
                 meta.size,
+                None,
             )
             .await;
         if let Err(e) = uploaded {
@@ -220,7 +221,7 @@ async fn resolve_target(to: &str, self_info: &PeerInfo) -> Result<Device> {
         });
     }
 
-    let d = Discoverer::start(self_info.clone()).await?;
+    let d = Discoverer::start(self_info.clone(), None).await?;
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if let Some(dev) = d.devices().into_iter().find(|dev| dev.info.alias == to) {
@@ -242,7 +243,7 @@ async fn cmd_recv(args: &[String]) -> Result<()> {
 
     let receiver = Receiver::start(
         &identity,
-        trust,
+        Arc::new(Mutex::new(trust)),
         &save_dir,
         info.clone(),
         Arc::new(|req: TransferRequest| {
@@ -268,7 +269,7 @@ async fn cmd_recv(args: &[String]) -> Result<()> {
     .await?;
 
     info.port = receiver.port();
-    let _discoverer = Discoverer::start(info.clone()).await?;
+    let _discoverer = Discoverer::start(info.clone(), None).await?;
 
     println!(
         "수신 대기 중 (alias: {}, 포트: {}, 저장: {}, 버전: {VERSION}) — Ctrl+C로 종료",

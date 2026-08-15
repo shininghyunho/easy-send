@@ -1,12 +1,15 @@
 import 'dart:io';
 
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../format.dart';
 import '../providers.dart';
+import '../rust/api/easy_send.dart';
+
+/// PRD 4.1 기본 서비스 포트.
+const _defaultServicePort = 53318;
 
 class SettingsTab extends ConsumerStatefulWidget {
   const SettingsTab({super.key});
@@ -109,17 +112,17 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
           const Divider(height: 32),
           Text('신뢰 기기', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          if (controller.trustStore.all.isEmpty)
+          if (controller.trusted.isEmpty)
             Text('아직 없습니다. 첫 전송을 승인하면 여기에 저장됩니다.',
                 style: Theme.of(context).textTheme.bodySmall),
-          for (final device in controller.trustStore.all)
+          for (final device in controller.trusted)
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.verified_user_outlined),
               title: Text(device.alias),
               subtitle: Text(
                   '${shortFingerprint(device.fingerprint)} · 최초 승인 '
-                  '${device.firstApprovedAt.toLocal().toString().substring(0, 16)}'),
+                  '${DateTime.parse(device.trustedAt).toLocal().toString().substring(0, 16)}'),
               trailing: IconButton(
                 tooltip: '신뢰 해제',
                 icon: const Icon(Icons.delete_outline),
@@ -155,9 +158,8 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
     if (input.isEmpty) return;
     final parts = input.split(':');
     final address = parts[0];
-    final port = parts.length > 1
-        ? int.tryParse(parts[1])
-        : Protocol.defaultServicePort;
+    final port =
+        parts.length > 1 ? int.tryParse(parts[1]) : _defaultServicePort;
     if (address.isEmpty || port == null) {
       _toast('주소 형식이 잘못되었습니다');
       return;
@@ -165,18 +167,17 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
     setState(() => _addingManual = true);
     final controller = ref.read(appControllerProvider);
     try {
-      final device = await exchangeInfo(
-        address: address,
-        port: port,
-        self: controller.self,
-      ).timeout(const Duration(seconds: 10));
+      final device = await manualExchangeInfo(address: address, port: port)
+          .timeout(const Duration(seconds: 10));
       controller.addManualDevice(device);
       _manualAddress.clear();
-      _toast('${device.info.alias} 추가됨 — 보내기 탭에서 확인하세요');
-    } on FingerprintMismatchException {
-      _toast('기기 지문이 응답과 다릅니다 — 추가하지 않았습니다');
-    } catch (_) {
-      _toast('연결 실패 — 주소와 상대 앱 실행 여부를 확인하세요');
+      _toast('${device.alias} 추가됨 — 보내기 탭에서 확인하세요');
+    } catch (e) {
+      if ('$e'.contains('지문')) {
+        _toast('기기 지문이 응답과 다릅니다 — 추가하지 않았습니다');
+      } else {
+        _toast('연결 실패 — 주소와 상대 앱 실행 여부를 확인하세요');
+      }
     } finally {
       if (mounted) setState(() => _addingManual = false);
     }

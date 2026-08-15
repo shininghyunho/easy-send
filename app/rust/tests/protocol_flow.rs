@@ -6,7 +6,7 @@ use rust_lib_easy_send_app::core::transfer::recv::Receiver;
 use rust_lib_easy_send_app::core::transfer::send::Sender;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -31,7 +31,7 @@ async fn start_receiver(approve: bool, approval_timeout: Option<Duration>) -> Te
     };
     let receiver = Receiver::start(
         &identity,
-        trust,
+        Arc::new(Mutex::new(trust)),
         save_dir.path(),
         self_info,
         Arc::new(move |_req| {
@@ -108,11 +108,11 @@ async fn approve_two_files_saves_bytes_and_records_trust() {
     ]);
     let session = sender.prepare_upload(files).await.unwrap();
     sender
-        .upload_file(&session.session_id, "f1", &session.tokens["f1"], &path_a, a.len() as u64)
+        .upload_file(&session.session_id, "f1", &session.tokens["f1"], &path_a, a.len() as u64, None)
         .await
         .unwrap();
     sender
-        .upload_file(&session.session_id, "f2", &session.tokens["f2"], &path_b, b.len() as u64)
+        .upload_file(&session.session_id, "f2", &session.tokens["f2"], &path_b, b.len() as u64, None)
         .await
         .unwrap();
 
@@ -151,7 +151,7 @@ async fn approval_timeout_returns_408() {
         fingerprint: identity.fingerprint.clone(),
         receiver: Receiver::start(
             &identity,
-            trust,
+            Arc::new(Mutex::new(trust)),
             save_dir.path(),
             self_info,
             Arc::new(|_req| Box::pin(futures_util::future::pending())),
@@ -190,7 +190,7 @@ async fn concurrent_prepare_returns_409() {
         fingerprint: identity.fingerprint.clone(),
         receiver: Receiver::start(
             &identity,
-            trust,
+            Arc::new(Mutex::new(trust)),
             save_dir.path(),
             self_info,
             Arc::new(|_req| {
@@ -231,14 +231,14 @@ async fn invalid_token_and_cancelled_session_return_404() {
 
     let session = sender.prepare_upload(files.clone()).await.unwrap();
     let err = sender
-        .upload_file(&session.session_id, "f1", "wrong-token", &path, content.len() as u64)
+        .upload_file(&session.session_id, "f1", "wrong-token", &path, content.len() as u64, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("404"), "{err:#}");
 
     sender.cancel(&session.session_id).await;
     let err = sender
-        .upload_file(&session.session_id, "f1", &session.tokens["f1"], &path, content.len() as u64)
+        .upload_file(&session.session_id, "f1", &session.tokens["f1"], &path, content.len() as u64, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("404"), "{err:#}");

@@ -58,19 +58,20 @@ struct Shared {
     on_saved: Option<SavedFn>,
     approval_timeout: Duration,
     state: Mutex<State>,
-    trust: Mutex<TrustStore>,
+    trust: Arc<Mutex<TrustStore>>,
     port: u16,
 }
 
 pub struct Receiver {
     shared: Arc<Shared>,
+    accept_task: tokio::task::AbortHandle,
 }
 
 impl Receiver {
     // 53318에 HTTPS 서버를 연다. 사용 중이면 임의 포트로 폴백 (4.1)
     pub async fn start(
         identity: &Identity,
-        trust: TrustStore,
+        trust: Arc<Mutex<TrustStore>>,
         save_dir: &Path,
         self_info: PeerInfo,
         on_approval: ApprovalFn,
@@ -91,12 +92,12 @@ impl Receiver {
             on_saved,
             approval_timeout: approval_timeout.unwrap_or(APPROVAL_TIMEOUT),
             state: Mutex::new(State::Idle),
-            trust: Mutex::new(trust),
+            trust,
             port,
         });
 
         let accept_shared = shared.clone();
-        tokio::spawn(async move {
+        let accept_task = tokio::spawn(async move {
             loop {
                 let Ok((tcp, _)) = listener.accept().await else {
                     return;
@@ -114,12 +115,18 @@ impl Receiver {
                         .await;
                 });
             }
-        });
-        Ok(Receiver { shared })
+        })
+        .abort_handle();
+        Ok(Receiver { shared, accept_task })
     }
 
     pub fn port(&self) -> u16 {
         self.shared.port
+    }
+
+    // accept 루프 중단 = 리스너 drop → 포트 해제. 진행 중 연결은 자연 종료된다.
+    pub fn stop(&self) {
+        self.accept_task.abort();
     }
 }
 

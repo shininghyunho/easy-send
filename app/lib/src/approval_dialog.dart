@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:flutter/material.dart';
 
 import 'format.dart';
+import 'rust/api/easy_send.dart';
 
-Future<bool?> showApprovalDialog(BuildContext context, TransferRequest request) {
+Future<bool?> showApprovalDialog(BuildContext context, ApprovalRequest request) {
   return showDialog<bool>(
     context: context,
     barrierDismissible: false,
@@ -17,7 +17,7 @@ Future<bool?> showApprovalDialog(BuildContext context, TransferRequest request) 
 class ApprovalDialog extends StatefulWidget {
   const ApprovalDialog({super.key, required this.request});
 
-  final TransferRequest request;
+  final ApprovalRequest request;
 
   @override
   State<ApprovalDialog> createState() => _ApprovalDialogState();
@@ -44,12 +44,11 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
   @override
   Widget build(BuildContext context) {
     final request = widget.request;
-    final totalBytes =
-        request.files.values.fold(0, (sum, m) => sum + m.size);
+    final totalBytes = request.files.fold(0, (sum, m) => sum + m.size);
     return AlertDialog(
       title: Row(
         children: [
-          Expanded(child: Text('${request.sender.alias}의 전송 요청')),
+          Expanded(child: Text('${request.senderAlias}의 전송 요청')),
           if (request.isNewDevice)
             Chip(
               label: const Text('새 기기'),
@@ -71,7 +70,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  for (final meta in request.files.values)
+                  for (final meta in request.files)
                     ListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
@@ -85,7 +84,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
             ),
             const SizedBox(height: 4),
             Text(
-              '지문 ${shortFingerprint(request.sender.fingerprint)}',
+              '지문 ${shortFingerprint(request.senderFingerprint)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -107,13 +106,13 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
 
 /// 송신 측 최초 신뢰 확인 (PRD 4.4 TOFU 송신 규칙).
 Future<bool?> showTrustConfirmDialog(
-    BuildContext context, DeviceInfo target) {
+    BuildContext context, {required String alias, required String fingerprint}) {
   return showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('새 기기'),
       content: Text(
-          '${target.alias}에 처음 보냅니다.\n지문 ${shortFingerprint(target.fingerprint)}\n이 기기를 신뢰할까요?'),
+          '$alias에 처음 보냅니다.\n지문 ${shortFingerprint(fingerprint)}\n이 기기를 신뢰할까요?'),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(false),

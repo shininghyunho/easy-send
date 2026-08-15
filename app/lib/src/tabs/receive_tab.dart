@@ -33,7 +33,7 @@ class ReceiveTab extends ConsumerWidget {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           Text(
-            '지문 ${shortFingerprint(controller.identity.fingerprint)}',
+            '지문 ${shortFingerprint(controller.fingerprint)}',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),

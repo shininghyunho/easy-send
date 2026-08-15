@@ -1,10 +1,11 @@
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'src/app_controller.dart';
 import 'src/approval_dialog.dart';
 import 'src/providers.dart';
+import 'src/rust/api/easy_send.dart';
+import 'src/rust/frb_generated.dart';
 import 'src/tabs/receive_tab.dart';
 import 'src/tabs/send_tab.dart';
 import 'src/tabs/settings_tab.dart';
@@ -13,6 +14,7 @@ final navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await RustLib.init();
   final controller = await AppController.start();
   runApp(ProviderScope(
     overrides: [appControllerProvider.overrideWithValue(controller)],
@@ -34,7 +36,7 @@ class _EasySendAppState extends ConsumerState<EasySendApp> {
     ref.read(appControllerProvider).approvalHandler = _onApprovalRequest;
   }
 
-  Future<bool> _onApprovalRequest(TransferRequest request) async {
+  Future<bool> _onApprovalRequest(ApprovalRequest request) async {
     final context = navigatorKey.currentContext;
     if (context == null) return false;
     final approved = await showApprovalDialog(context, request);

@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../approval_dialog.dart';
 import '../format.dart';
 import '../providers.dart';
+import '../rust/api/easy_send.dart';
 import '../send_controller.dart';
 
 class SendTab extends ConsumerWidget {
@@ -49,12 +49,11 @@ class SendTab extends ConsumerWidget {
               ),
             for (final device in devices)
               ListTile(
-                leading: Icon(device.info.deviceType == DeviceType.mobile
+                leading: Icon(device.deviceType == 'mobile'
                     ? Icons.smartphone
                     : Icons.computer),
-                title: Text(device.info.alias),
-                subtitle:
-                    Text('${device.address.address}:${device.info.port}'),
+                title: Text(device.alias),
+                subtitle: Text('${device.ip}:${device.port}'),
                 trailing: const Icon(Icons.send),
                 onTap: () => _pickAndSend(context, ref, device),
               ),
@@ -65,17 +64,17 @@ class SendTab extends ConsumerWidget {
   }
 
   /// 탐색 목록 우선(주소가 최신), 수동 추가분은 지문이 겹치지 않을 때만.
-  List<DiscoveredDevice> _merge(
-      List<DiscoveredDevice> discovered, List<DiscoveredDevice> manual) {
-    final seen = discovered.map((d) => d.info.fingerprint).toSet();
+  List<DeviceSnapshot> _merge(
+      List<DeviceSnapshot> discovered, List<DeviceSnapshot> manual) {
+    final seen = discovered.map((d) => d.fingerprint).toSet();
     return [
       ...discovered,
-      ...manual.where((d) => seen.contains(d.info.fingerprint) == false),
+      ...manual.where((d) => seen.contains(d.fingerprint) == false),
     ];
   }
 
   Future<void> _pickAndSend(
-      BuildContext context, WidgetRef ref, DiscoveredDevice device) async {
+      BuildContext context, WidgetRef ref, DeviceSnapshot device) async {
     final controller = ref.read(appControllerProvider);
     final progress = ref.read(sendControllerProvider);
     if (progress?.inFlight == true) {
@@ -88,12 +87,12 @@ class SendTab extends ConsumerWidget {
         (result?.paths ?? const []).whereType<String>().map(File.new).toList();
     if (files.isEmpty) return;
 
-    if (controller.trustStore.contains(device.info.fingerprint) == false) {
+    if (await controller.isTrusted(device.fingerprint) == false) {
       if (context.mounted == false) return;
-      final trusted = await showTrustConfirmDialog(context, device.info);
+      final trusted = await showTrustConfirmDialog(context,
+          alias: device.alias, fingerprint: device.fingerprint);
       if (trusted != true) return;
-      await controller.trustStore.add(
-          device.info.fingerprint, device.info.alias);
+      await controller.addTrusted(device.fingerprint, device.alias);
     }
     ref.read(sendControllerProvider.notifier).send(device, files);
   }
@@ -119,7 +118,7 @@ class _ProgressCard extends ConsumerWidget {
         ),
       SendPhase.done => ('전송 완료', Colors.green),
       SendPhase.canceled => ('전송 취소됨', null),
-      SendPhase.error => (
+      SendPhase.failed => (
           progress.message ?? '전송 실패',
           Theme.of(context).colorScheme.error
         ),

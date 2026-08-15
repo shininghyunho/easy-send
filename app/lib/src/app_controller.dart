@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'rust/api/easy_send.dart';
 
 /// MulticastLock(S2)·MediaStore 저장(S3) — Android 전용 네이티브 채널.
 const _native = MethodChannel('easy_send/native');
@@ -28,53 +29,46 @@ class AppSettings {
   Map<String, dynamic> toJson() => {'alias': alias, 'saveDirPath': saveDirPath};
 }
 
-/// core 서비스(신원·신뢰 목록·수신 서버·탐색)의 생명주기 소유자.
-/// 설정 변경은 서비스 재시작으로 반영한다.
+/// Rust 노드(신원·신뢰 목록·수신 서버·탐색)의 생명주기 소유자.
+/// 설정 변경은 노드 재시작으로 반영한다.
 class AppController extends ChangeNotifier {
-  AppController._(this._baseDir, this.identity, this.trustStore, this._settings);
+  AppController._(this._baseDir, this._settings);
 
   final Directory _baseDir;
-  final DeviceIdentity identity;
-  final TrustStore trustStore;
   AppSettings _settings;
 
-  ReceiveServer? _server;
-  DiscoveryService? _discovery;
-  StreamSubscription<List<DiscoveredDevice>>? _deviceSub;
-  // 설정 변경으로 DiscoveryService가 교체돼도 UI 구독은 이 스트림 하나로 유지
-  final _devicesOut = StreamController<List<DiscoveredDevice>>.broadcast();
+  NodeStatus? _node;
+  StreamSubscription<List<DeviceSnapshot>>? _deviceSub;
+  StreamSubscription<SavedFileEvent>? _savedSub;
+  // 설정 변경으로 노드가 재시작돼도 UI 구독은 이 스트림 하나로 유지
+  final _devicesOut = StreamController<List<DeviceSnapshot>>.broadcast();
+  List<DeviceSnapshot> _currentDevices = const [];
 
   /// IP 직접 입력으로 추가한 기기 — 탐색과 달리 TTL 없이 유지 (PRD 4.2 폴백).
-  final manualDevices = <DiscoveredDevice>[];
+  final manualDevices = <DeviceSnapshot>[];
 
   /// 이번 실행에서 받은 파일 (최신순, 영속 없음 — R5 히스토리 비목표).
   final recentReceived = <File>[];
 
+  /// 신뢰 기기 캐시 — 시작·승인·추가·해제 시 Rust에서 다시 읽는다.
+  List<TrustedDeviceView> trusted = const [];
+
   /// 수신 승인 다이얼로그. UI 계층이 앱 시작 시 연결한다.
-  Future<bool> Function(TransferRequest request)? approvalHandler;
+  Future<bool> Function(ApprovalRequest request)? approvalHandler;
 
   AppSettings get settings => _settings;
-  int get port => _server?.port ?? 0;
-  Stream<List<DiscoveredDevice>> get devices => _devicesOut.stream;
-  List<DiscoveredDevice> get currentDevices =>
-      _discovery?.currentDevices ?? const [];
-
-  DeviceInfo get self => DeviceInfo(
-        alias: _settings.alias,
-        deviceType: Platform.isAndroid ? DeviceType.mobile : DeviceType.desktop,
-        fingerprint: identity.fingerprint,
-        port: port,
-      );
+  int get port => _node?.port ?? 0;
+  String get fingerprint => _node?.fingerprint ?? '';
+  Stream<List<DeviceSnapshot>> get devices => _devicesOut.stream;
+  List<DeviceSnapshot> get currentDevices => _currentDevices;
 
   static Future<AppController> start() async {
     if (Platform.isAndroid) {
       await _native.invokeMethod('acquireMulticastLock');
     }
     final baseDir = await getApplicationSupportDirectory();
-    final identity = await DeviceIdentity.loadOrCreate(baseDir);
-    final trustStore = TrustStore(File('${baseDir.path}/trusted.json'));
     final settings = await _loadSettings(baseDir);
-    final controller = AppController._(baseDir, identity, trustStore, settings);
+    final controller = AppController._(baseDir, settings);
     await controller._startServices();
     return controller;
   }
@@ -100,41 +94,37 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _startServices() async {
-    final saveDir = Directory(_settings.saveDirPath)
-      ..createSync(recursive: true);
-    final server = ReceiveServer(
-      identity: identity,
-      self: DeviceInfo(
+    _node = await nodeStart(
+      config: NodeConfig(
+        baseDir: _baseDir.path,
+        saveDir: _settings.saveDirPath,
         alias: _settings.alias,
-        deviceType:
-            Platform.isAndroid ? DeviceType.mobile : DeviceType.desktop,
-        fingerprint: identity.fingerprint,
-        port: 0,
+        deviceType: Platform.isAndroid ? 'mobile' : 'desktop',
       ),
-      trustStore: trustStore,
-      saveDir: saveDir,
-      onApprovalRequest: (req) => approvalHandler?.call(req) ?? Future.value(false),
-      onFileSaved: (fileId, saved) {
-        if (Platform.isAndroid) {
-          _exportToDownloads(saved);
-          return;
-        }
-        _recordReceived(saved);
-      },
+      onApproval: _onApproval,
     );
-    // PRD 4.1: 기본 포트가 사용 중이면 임의 포트로 열고 announce의 port로 알린다
-    try {
-      await server.start(port: Protocol.defaultServicePort);
-    } on SocketException {
-      await server.start();
-    }
-    _server = server;
-
-    final discovery = DiscoveryService(self: self);
-    await discovery.start();
-    _deviceSub = discovery.devices.listen(_devicesOut.add);
-    _discovery = discovery;
+    _deviceSub = nodeDeviceEvents().listen((list) {
+      _currentDevices = list;
+      _devicesOut.add(list);
+    });
+    _savedSub = nodeSavedEvents().listen(_onSaved);
+    await _refreshTrusted();
     notifyListeners();
+  }
+
+  Future<bool> _onApproval(ApprovalRequest request) async {
+    final approved = await approvalHandler?.call(request) ?? false;
+    // 승인 시 Rust가 TOFU 기록을 남기므로 캐시를 따라간다
+    if (approved) unawaited(_refreshTrusted());
+    return approved;
+  }
+
+  void _onSaved(SavedFileEvent event) {
+    if (Platform.isAndroid) {
+      _exportToDownloads(File(event.path));
+      return;
+    }
+    _recordReceived(File(event.path));
   }
 
   void _recordReceived(File file) {
@@ -155,13 +145,17 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<void> _refreshTrusted() async {
+    trusted = await trustList();
+    notifyListeners();
+  }
+
   Future<void> _stopServices() async {
     await _deviceSub?.cancel();
-    _discovery?.stop();
-    await _server?.stop();
+    await _savedSub?.cancel();
     _deviceSub = null;
-    _discovery = null;
-    _server = null;
+    _savedSub = null;
+    await nodeStop();
   }
 
   Future<void> applySettings(AppSettings next) async {
@@ -173,18 +167,25 @@ class AppController extends ChangeNotifier {
   }
 
   /// UI 새로고침 버튼 = 즉시 announce 1회 (PRD 4.2).
-  void refreshDiscovery() => _discovery?.announce();
+  void refreshDiscovery() => unawaited(nodeAnnounce());
 
-  void addManualDevice(DiscoveredDevice device) {
-    if (device.info.fingerprint == identity.fingerprint) return;
-    manualDevices
-        .removeWhere((d) => d.info.fingerprint == device.info.fingerprint);
+  void addManualDevice(DeviceSnapshot device) {
+    if (device.fingerprint == fingerprint) return;
+    manualDevices.removeWhere((d) => d.fingerprint == device.fingerprint);
     manualDevices.add(device);
     notifyListeners();
   }
 
+  Future<bool> isTrusted(String fingerprint) =>
+      trustContains(fingerprint: fingerprint);
+
+  Future<void> addTrusted(String fingerprint, String alias) async {
+    await trustAdd(fingerprint: fingerprint, alias: alias);
+    await _refreshTrusted();
+  }
+
   Future<void> removeTrusted(String fingerprint) async {
-    await trustStore.remove(fingerprint);
-    notifyListeners();
+    await trustRemove(fingerprint: fingerprint);
+    await _refreshTrusted();
   }
 }

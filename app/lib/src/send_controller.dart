@@ -1,11 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
-import 'package:easy_send_core/easy_send_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'providers.dart';
-
-enum SendPhase { waitingApproval, uploading, done, error, canceled }
+import 'rust/api/easy_send.dart';
 
 class SendProgress {
   const SendProgress({
@@ -50,124 +48,71 @@ class SendProgress {
       );
 }
 
-/// 송신 1회의 실행자 — 동시 1건, 진행률과 결과를 상태로 노출한다.
+/// 송신 1회의 실행자 — 전송 자체는 Rust(send_files)가 수행하고
+/// 여기서는 이벤트 스트림을 UI 상태로 매핑만 한다. 동시 1건.
 class SendController extends Notifier<SendProgress?> {
-  SendClient? _client;
-  PreparedSession? _session;
-  DiscoveredDevice? _target;
-  bool _cancelRequested = false;
+  StreamSubscription<SendEvent>? _sub;
 
   @override
   SendProgress? build() => null;
 
-  Future<void> send(DiscoveredDevice target, List<File> files) async {
+  Future<void> send(DeviceSnapshot target, List<File> files) async {
     if (state?.inFlight == true) return;
-    final controller = ref.read(appControllerProvider);
-    final metas = <String, FileMeta>{
-      for (var i = 0; i < files.length; i++)
-        'f$i': FileMeta(
-          name: files[i].uri.pathSegments.last,
-          size: files[i].lengthSync(),
-          mime: 'application/octet-stream',
-        ),
-    };
-    final totalBytes = metas.values.fold(0, (sum, m) => sum + m.size);
-    final client = SendClient(
-      address: target.address.address,
-      port: target.info.port,
-      expectedFingerprint: target.info.fingerprint,
-    );
-    _client = client;
-    _session = null;
-    _target = target;
-    _cancelRequested = false;
     state = SendProgress(
-      targetAlias: target.info.alias,
+      targetAlias: target.alias,
       fileCount: files.length,
       fileIndex: 0,
-      currentFileName: metas['f0']!.name,
+      currentFileName: files.first.uri.pathSegments.last,
       sentBytes: 0,
-      totalBytes: totalBytes,
+      totalBytes: 0,
       phase: SendPhase.waitingApproval,
     );
+    await _sub?.cancel();
+    _sub = sendFiles(
+      target: SendTarget(
+        ip: target.ip,
+        port: target.port,
+        fingerprint: target.fingerprint,
+        alias: target.alias,
+      ),
+      paths: files.map((f) => f.path).toList(),
+    ).listen(_onEvent, onError: (Object e) {
+      state = state?.copyWith(phase: SendPhase.failed, message: '$e');
+    });
+  }
 
-    try {
-      final session = await client.prepareUpload(controller.self, metas);
-      _session = session;
-      var completedBytes = 0;
-      var lastEmitted = 0;
-      for (var i = 0; i < files.length; i++) {
-        final meta = metas['f$i']!;
-        state = state!.copyWith(
+  void _onEvent(SendEvent event) {
+    final current = state;
+    if (current == null) return;
+    switch (event.phase) {
+      case SendPhase.waitingApproval:
+        break; // send()에서 이미 반영
+      case SendPhase.uploading:
+        state = SendProgress(
+          targetAlias: current.targetAlias,
+          fileCount: event.fileCount,
+          fileIndex: event.fileIndex,
+          currentFileName: event.fileName,
+          sentBytes: event.sentBytes,
+          totalBytes: event.totalBytes,
           phase: SendPhase.uploading,
-          fileIndex: i,
-          currentFileName: meta.name,
         );
-        await client.uploadFile(session, 'f$i', files[i],
-            onProgress: (sent, total) {
-          final overall = completedBytes + sent;
-          // 청크마다 리빌드하지 않도록 1MB 단위로만 반영
-          if (overall - lastEmitted >= 1 << 20 || sent == total) {
-            lastEmitted = overall;
-            state = state!.copyWith(sentBytes: overall);
-          }
-        });
-        completedBytes += meta.size;
-      }
-      state = state!.copyWith(phase: SendPhase.done, sentBytes: totalBytes);
-    } on TransferException catch (e) {
-      if (_cancelRequested) {
-        state = state!.copyWith(phase: SendPhase.canceled, message: '전송을 취소했습니다');
-      } else {
-        state = state!.copyWith(phase: SendPhase.error, message: _messageFor(e));
-      }
-    } on FingerprintMismatchException {
-      state = state!.copyWith(
-          phase: SendPhase.error,
-          message: '기기 지문이 광고된 값과 다릅니다 — 연결을 차단했습니다');
-    } catch (e) {
-      if (_cancelRequested) {
-        state = state!.copyWith(phase: SendPhase.canceled, message: '전송을 취소했습니다');
-      } else {
-        state = state!.copyWith(phase: SendPhase.error, message: '$e');
-      }
-    } finally {
-      client.close();
-      _client = null;
-      _session = null;
-      _target = null;
+      case SendPhase.done:
+        state = current.copyWith(
+            phase: SendPhase.done, sentBytes: current.totalBytes);
+      case SendPhase.failed:
+        state = current.copyWith(
+            phase: SendPhase.failed, message: event.message ?? '전송 실패');
+      case SendPhase.canceled:
+        state =
+            current.copyWith(phase: SendPhase.canceled, message: '전송을 취소했습니다');
     }
   }
 
-  Future<void> cancel() async {
-    _cancelRequested = true;
-    final session = _session;
-    final target = _target;
-    _client?.close();
-    // 세션이 이미 열렸으면 수신 측 상태도 정리 (닫힌 클라이언트로는 못 보냄)
-    if (session != null && target != null) {
-      final cleanup = SendClient(
-        address: target.address.address,
-        port: target.info.port,
-        expectedFingerprint: target.info.fingerprint,
-      );
-      try {
-        await cleanup.cancel(session);
-      } catch (_) {}
-      cleanup.close();
-    }
-  }
+  Future<void> cancel() => sendCancel();
 
   void dismiss() {
     if (state?.inFlight == true) return;
     state = null;
-  }
-
-  String _messageFor(TransferException e) {
-    if (e.declined) return '상대가 거절했습니다';
-    if (e.busy) return '상대가 다른 전송을 진행 중입니다';
-    if (e.approvalTimedOut) return '승인 대기 시간(60초)을 초과했습니다';
-    if (e.invalidSession) return '세션이 취소되었습니다';
-    return '수신 측 오류 (HTTP ${e.statusCode})';
   }
 }
