@@ -94,7 +94,8 @@ class ReceiveServer {
 
   Future<void> _handleInfo(HttpRequest req) async {
     await utf8.decoder.bind(req).join();
-    await _respondJson(req, self.toJson());
+    // self.port는 바인딩 전 값(0)일 수 있어 실제 포트로 바꿔 응답한다
+    await _respondJson(req, {...self.toJson(), 'port': port});
   }
 
   Future<void> _handlePrepareUpload(HttpRequest req) async {

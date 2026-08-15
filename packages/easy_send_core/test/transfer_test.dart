@@ -31,13 +31,14 @@ void main() {
     required Future<bool> Function(TransferRequest) onApproval,
     Duration approvalTimeout = const Duration(seconds: 60),
     TrustStore? trustStore,
+    String? advertisedFingerprint,
   }) async {
     final server = ReceiveServer(
       identity: identity,
       self: DeviceInfo(
         alias: 'receiver',
         deviceType: DeviceType.desktop,
-        fingerprint: identity.fingerprint,
+        fingerprint: advertisedFingerprint ?? identity.fingerprint,
         port: 0,
       ),
       trustStore: trustStore ?? TrustStore(File('${tempDir.path}/trust.json')),
@@ -180,6 +181,26 @@ void main() {
       throwsA(predicate((e) => e is TransferException && e.invalidSession)),
     );
     client.close();
+    await server.stop();
+  });
+
+  // /info 폴백은 다른 테스트·E2E 프로브 어느 쪽도 지나지 않는 경로.
+  test('IP 직접 입력: /info 교환으로 검증된 상대 정보를 얻는다', () async {
+    final server = await startServer(onApproval: (_) async => true);
+    final found = await exchangeInfo(
+        address: '127.0.0.1', port: server.port, self: senderInfo());
+    expect(found.info.alias, 'receiver');
+    expect(found.info.fingerprint, identity.fingerprint);
+    await server.stop();
+  });
+
+  test('IP 직접 입력: 응답 fingerprint ≠ 인증서 지문 → 거부', () async {
+    final server =
+        await startServer(onApproval: (_) async => true, advertisedFingerprint: '0' * 64);
+    await expectLater(
+      exchangeInfo(address: '127.0.0.1', port: server.port, self: senderInfo()),
+      throwsA(isA<FingerprintMismatchException>()),
+    );
     await server.stop();
   });
 

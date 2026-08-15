@@ -1,0 +1,24 @@
+name: easy_send_app
+description: "easy-send Flutter app (PRD 5장) — easy_send_core를 3탭 UI로 감싼다."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  easy_send_core:
+    path: ../packages/easy_send_core
+  flutter_riverpod: ^3.0.0
+  file_picker: ^10.0.0
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
