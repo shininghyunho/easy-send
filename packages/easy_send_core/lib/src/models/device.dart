@@ -36,6 +36,26 @@ class DeviceInfo {
         'fingerprint': fingerprint,
         'port': port,
       };
+
+  static DeviceInfo? tryFromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final alias = json['alias'];
+    final deviceType = json['deviceType'];
+    final fingerprint = json['fingerprint'];
+    final port = json['port'];
+    if (alias is! String ||
+        deviceType is! String ||
+        fingerprint is! String ||
+        port is! int) {
+      return null;
+    }
+    return DeviceInfo(
+      alias: alias,
+      deviceType: DeviceType.fromName(deviceType),
+      fingerprint: fingerprint,
+      port: port,
+    );
+  }
 }
 
 /// 탐색 UDP 패킷 1개 — announce(멀티캐스트) 또는 그 응답(유니캐스트).
@@ -71,27 +91,10 @@ class Announcement {
         version.split('.').first != Protocol.versionMajor) {
       return null;
     }
-    final alias = decoded['alias'];
-    final deviceType = decoded['deviceType'];
-    final fingerprint = decoded['fingerprint'];
-    final port = decoded['port'];
+    final info = DeviceInfo.tryFromJson(decoded);
     final announce = decoded['announce'];
-    if (alias is! String ||
-        deviceType is! String ||
-        fingerprint is! String ||
-        port is! int ||
-        announce is! bool) {
-      return null;
-    }
-    return Announcement(
-      info: DeviceInfo(
-        alias: alias,
-        deviceType: DeviceType.fromName(deviceType),
-        fingerprint: fingerprint,
-        port: port,
-      ),
-      announce: announce,
-    );
+    if (info == null || announce is! bool) return null;
+    return Announcement(info: info, announce: announce);
   }
 }
 
