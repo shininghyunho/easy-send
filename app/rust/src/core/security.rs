@@ -83,7 +83,8 @@ impl TrustStore {
     pub fn open(dir: &Path) -> Result<TrustStore> {
         let path = dir.join("trusted.json");
         let devices = match fs::read(&path) {
-            Ok(data) => serde_json::from_slice(&data)?,
+            // 파싱 불가(Dart 시절 배열 포맷 등)면 빈 스토어로 시작 — TOFU 재승인으로 복구된다
+            Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(e) => return Err(e.into()),
         };
